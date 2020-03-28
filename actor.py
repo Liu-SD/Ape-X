@@ -5,7 +5,7 @@ import queue
 
 import zmq
 import torch
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
 import utils
@@ -114,6 +114,96 @@ def exploration(args, actor_id, n_actors, replay_ip, param_queue):
             outstanding += 1
             print("Sending Batch..")
 
+def vector_exploration(args, actor_id, n_actors, replay_ip, param_queue):
+    ctx = zmq.Context()
+    batch_socket = ctx.socket(zmq.DEALER)
+    batch_socket.setsockopt(zmq.IDENTITY, pickle.dumps('actor-{}'.format(actor_id)))
+    batch_socket.connect('tcp://{}:51001'.format(replay_ip))
+    outstanding = 0
+
+    writer = SummaryWriter(comment="-{}-actor{}".format(args.env, actor_id))
+
+    num_envs = args.num_envs_per_worker
+    envs = [wrap_atari_dqn(make_atari(args.env), args) for _ in range(num_envs)]
+
+    if args.seed is not None:
+        seed = args.seed + actor_id
+        utils.set_global_seeds(seed, use_torch=True)
+        for env in envs:
+            env.seed(seed)
+
+    model = DuelingDQN(envs[0])
+    _actor_id = np.arange(num_envs) + actor_id * num_envs
+    n_actors = n_actors * num_envs
+    epsilons = args.eps_base ** (1 + _actor_id / (n_actors - 1) * args.eps_alpha)
+    storages = [BatchStorage(args.n_steps, args.gamma) for _ in range(num_envs)]
+
+    param = param_queue.get(block=True)
+    model.load_state_dict(param)
+    param = None
+    print("%d: Received First Parameter!"%actor_id)
+
+    actor_idx = 0
+    tb_idx = 0
+    episode_rewards = [0] * num_envs
+    episode_lengths = [0] * num_envs
+    states = [env.reset() for env in envs]
+    while True:
+        if actor_idx * num_envs * n_actors <= args.initial_exploration_samples: # initial random exploration
+            random_idx = np.arange(num_envs)
+        else:
+            random_idx, = np.where(np.random.random(num_envs) <= epsilons)
+        with torch.no_grad():
+            states_tensor = torch.tensor(states)
+            q_values = model(states_tensor).detach().numpy()
+        actions = np.argmax(q_values, 1)
+        actions[random_idx] = np.random.choice(envs[0].action_space.n, len(random_idx))
+
+        for i, (state, q_value, action, env, storage) in enumerate(zip(states, q_values, actions, envs, storages)):
+            next_state, reward, done, _ = env.step(action)
+            storage.add(state, reward, action, done, q_value)
+            states[i] = next_state
+            episode_rewards[i] += reward
+            episode_lengths[i] += 1
+            if done or episode_lengths[i] == args.max_episode_length:
+                states[i] = env.reset()
+                tb_idx += 1
+                writer.add_scalar("actor/episode_reward", episode_rewards[i], tb_idx)
+                writer.add_scalar("actor/episode_length", episode_lengths[i], tb_idx)
+                episode_rewards[i] = 0
+                episode_lengths[i] = 0
+
+        actor_idx += 1
+
+        if actor_idx % args.update_interval == 0:
+            try:
+                param = param_queue.get(block=False)
+                model.load_state_dict(param)
+                print("%d: Updated Parameter.."%actor_id)
+            except queue.Empty:
+                pass
+
+        if sum(len(storage) for storage in storages) >= args.send_interval * num_envs:
+            batch = None
+            prios = None
+            for storage in storages:
+                _batch, _prios = storage.make_batch()
+                if batch is None:
+                    batch = _batch
+                    prios = _prios
+                else:
+                    for i, v in enumerate(batch):
+                        batch[i] = np.concatenate((v, _batch[i]))
+                        prios = np.concatenate((prios, _prios))
+                storage.reset()
+            data = pickle.dumps((batch, prios))
+            batch, prios = None, None
+            while outstanding >= args.max_outstanding:
+                batch_socket.recv()
+                outstanding -= 1
+            batch_socket.send(data, copy=False)
+            outstanding += 1
+            print(f"{actor_id}: send  batch {len(data)/1024} kb")
 
 def main():
     actor_id, n_actors, replay_ip, learner_ip = get_environ()
@@ -121,7 +211,7 @@ def main():
     param_queue = Queue(maxsize=3)
 
     procs = [
-        Process(target=exploration, args=(args, actor_id, n_actors, replay_ip, param_queue)),
+        Process(target=vector_exploration, args=(args, actor_id, n_actors, replay_ip, param_queue)),
         Process(target=recv_param, args=(learner_ip, actor_id, param_queue)),
     ]
 

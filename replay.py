@@ -14,15 +14,23 @@ from zmq.asyncio import Context
 import utils
 from memory import CustomPrioritizedReplayBuffer
 from arguments import argparser
+from torch.utils.tensorboard import SummaryWriter
 
+_prev_t = time.time()
+_push_size = 0
+_sample_size = 0
+writer = SummaryWriter(comment='-replay')
+_tb_step = 0
 
 def push_batch(buffer, data):
     """
     support function to push batch samples to buffer
     """
+    global _push_size
     batch, prios = pickle.loads(data)
-    for sample in zip(*batch, prios):
+    for i, sample in enumerate(zip(*batch, prios)):
         buffer.add(*sample)
+    _push_size += i+1
     batch, prios = None, None
 
 
@@ -39,9 +47,24 @@ def sample_batch(buffer, batch_size, beta):
     """
     support function to update priorities to buffer
     """
+    global _prev_t
+    global _sample_size
+    global _push_size
+    global _tb_step
     batch = buffer.sample(batch_size, beta)
     data = pickle.dumps(batch)
     batch = None
+    _sample_size += batch_size
+    delta_t = time.time() - _prev_t
+    if delta_t > 3:
+        _tb_step += 1
+        writer.add_scalar('replay/push_per_second', _push_size / delta_t, _tb_step)
+        writer.add_scalar('replay/sample_per_second', _sample_size / delta_t, _tb_step)
+        writer.add_scalar('replay/buffer_size',len(buffer), _tb_step)
+        _sample_size = 0
+        _push_size = 0
+        _prev_t = time.time()
+
     return data
 
 

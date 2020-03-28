@@ -41,6 +41,7 @@ class DuelingDQN(nn.Module):
         )
 
     def forward(self, x):
+        x = x / 255.
         x = self.features(x)
         x = self.flatten(x)
         advantage = self.advantage(x)

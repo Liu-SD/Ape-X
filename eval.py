@@ -7,7 +7,7 @@ from multiprocessing import Process, Queue
 
 import zmq
 import torch
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
 import utils

@@ -10,7 +10,7 @@ import queue
 import torch
 import torch.multiprocessing as mp
 from torch.multiprocessing import Process, Queue
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import zmq
 
@@ -141,8 +141,8 @@ def train(args, n_actors, batch_queue, prios_queue, param_queue):
     tgt_model.load_state_dict(model.state_dict())
 
     writer = SummaryWriter(comment="-{}-learner".format(args.env))
-    # optimizer = torch.optim.Adam(model.parameters(), args.lr)
-    optimizer = torch.optim.RMSprop(model.parameters(), args.lr, alpha=0.95, eps=1.5e-7, centered=True)
+    optimizer = torch.optim.Adam(model.parameters(), args.lr)
+    # optimizer = torch.optim.RMSprop(model.parameters(), args.lr, alpha=0.95, eps=1.5e-7, centered=True)
 
     check_connection(n_actors)
 
@@ -151,7 +151,7 @@ def train(args, n_actors, batch_queue, prios_queue, param_queue):
     ts = time.time()
     while True:
         *batch, idxes = batch_queue.get()
-        loss, prios = utils.compute_loss(model, tgt_model, batch, args.n_steps, args.gamma)
+        loss, prios, q_values = utils.compute_loss(model, tgt_model, batch, args.n_steps, args.gamma)
         grad_norm = utils.update_parameters(loss, model, optimizer, args.max_norm)
         prios_queue.put((idxes, prios))
         batch, idxes, prios = None, None, None
@@ -159,6 +159,9 @@ def train(args, n_actors, batch_queue, prios_queue, param_queue):
 
         writer.add_scalar("learner/loss", loss, learn_idx)
         writer.add_scalar("learner/grad_norm", grad_norm, learn_idx)
+        writer.add_scalar("learner/max_q", torch.max(q_values), learn_idx)
+        writer.add_scalar("learner/mean_q", torch.mean(q_values), learn_idx)
+        writer.add_scalar("learner/min_q", torch.min(q_values), learn_idx)
 
         if learn_idx % args.target_update_interval == 0:
             print("Updating Target Network..")

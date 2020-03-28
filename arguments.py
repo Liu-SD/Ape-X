@@ -14,7 +14,7 @@ def argparser():
                         help='Discount factor for multi-step learning')
 
     # Environment Arguments
-    parser.add_argument('--env', type=str, default="SeaquestNoFrameskip-v4",
+    parser.add_argument('--env', type=str, default="SpaceInvadersNoFrameskip-v4",
                         help='Atari environment to use')
     parser.add_argument('--episode_life', type=int, default=1,
                         help='Whether env has episode life(1) or not(0)')
@@ -24,6 +24,8 @@ def argparser():
                         help='Whether env stacks frame(1) or not(0)')
     parser.add_argument('--scale', type=int, default=0,
                         help='Whether env scales(1) or not(0)')
+    parser.add_argument('--num_envs_per_worker', type=int, default=8,
+                        help='number of environments per worker, vectorize envs for eficient batch reference')
 
     # Arguments for Actor
     parser.add_argument('--send_interval', type=int, default=50,
@@ -42,8 +44,10 @@ def argparser():
                         help='Priority exponent')
     parser.add_argument('--beta', type=float, default=0.4,
                         help='Importance sampling exponent')
-    parser.add_argument('--replay_buffer_size', type=int, default=2000000,
+    parser.add_argument('--replay_buffer_size', type=int, default=1000000,
                         help='Size of prioritized replay buffer')
+    parser.add_argument('--initial_exploration_samples', type=int, default=50000,
+                        help='Initial random steps')
     parser.add_argument('--threshold_size', type=int, default=50000,
                         help='Threshold for starting to transfer batches to learner')
     parser.add_argument('--batch_size', type=int, default=512,
