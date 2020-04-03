@@ -56,7 +56,7 @@ def sample_batch(buffer, batch_size, beta):
     batch = None
     _sample_size += batch_size
     delta_t = time.time() - _prev_t
-    if delta_t > 3:
+    if delta_t > 60:
         _tb_step += 1
         writer.add_scalar('replay/push_per_second', _push_size / delta_t, _tb_step)
         writer.add_scalar('replay/sample_per_second', _sample_size / delta_t, _tb_step)

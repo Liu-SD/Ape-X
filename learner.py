@@ -136,8 +136,9 @@ def train(args, n_actors, batch_queue, prios_queue, param_queue):
     env = wrapper.wrap_atari_dqn(env, args)
     utils.set_global_seeds(args.seed, use_torch=True)
 
-    model = DuelingDQN(env).to(args.device)
-    tgt_model = DuelingDQN(env).to(args.device)
+    model = DuelingDQN(env, args).to(args.device)
+    # model.load_state_dict(torch.load('model_30h.pth'))
+    tgt_model = DuelingDQN(env, args).to(args.device)
     tgt_model.load_state_dict(model.state_dict())
 
     writer = SummaryWriter(comment="-{}-learner".format(args.env))
@@ -149,6 +150,7 @@ def train(args, n_actors, batch_queue, prios_queue, param_queue):
     param_queue.put(model.state_dict())
     learn_idx = 0
     ts = time.time()
+    tb_dict = {k: [] for k in ['loss', 'grad_norm', 'max_q', 'mean_q', 'min_q']}
     while True:
         *batch, idxes = batch_queue.get()
         loss, prios, q_values = utils.compute_loss(model, tgt_model, batch, args.n_steps, args.gamma)
@@ -157,13 +159,18 @@ def train(args, n_actors, batch_queue, prios_queue, param_queue):
         batch, idxes, prios = None, None, None
         learn_idx += 1
 
-        writer.add_scalar("learner/loss", loss, learn_idx)
-        writer.add_scalar("learner/grad_norm", grad_norm, learn_idx)
-        writer.add_scalar("learner/max_q", torch.max(q_values), learn_idx)
-        writer.add_scalar("learner/mean_q", torch.mean(q_values), learn_idx)
-        writer.add_scalar("learner/min_q", torch.min(q_values), learn_idx)
+        tb_dict["loss"].append(float(loss))
+        tb_dict["grad_norm"].append(float(grad_norm))
+        tb_dict["max_q"].append(float(torch.max(q_values)))
+        tb_dict["mean_q"].append(float(torch.mean(q_values)))
+        tb_dict["min_q"].append(float(torch.min(q_values)))
 
-        if learn_idx % args.target_update_interval == 0:
+        if args.soft_target_update:
+            tau = args.tau
+            for p_tgt, p in zip(tgt_model.parameters(), model.parameters()):
+                p_tgt.data *= 1-tau
+                p_tgt.data += tau * p
+        elif learn_idx % args.target_update_interval == 0:
             print("Updating Target Network..")
             tgt_model.load_state_dict(model.state_dict())
         if learn_idx % args.save_interval == 0:
@@ -171,10 +178,13 @@ def train(args, n_actors, batch_queue, prios_queue, param_queue):
             torch.save(model.state_dict(), "model.pth")
         if learn_idx % args.publish_param_interval == 0:
             param_queue.put(model.state_dict())
-        if learn_idx % args.bps_interval == 0:
-            bps = args.bps_interval / (time.time() - ts)
+        if learn_idx % args.tb_interval == 0:
+            bps = args.tb_interval / (time.time() - ts)
             print("Step: {:8} / BPS: {:.2f}".format(learn_idx, bps))
             writer.add_scalar("learner/BPS", bps, learn_idx)
+            for k, v in tb_dict.items():
+                writer.add_scalar(f'learner/{k}', np.mean(v), learn_idx)
+                v.clear()
             ts = time.time()
 
 

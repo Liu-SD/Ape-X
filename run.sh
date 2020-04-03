@@ -1,6 +1,6 @@
 #!/bin/bash
 tmux new -s replay -d 'source activate apex; python replay.py; read'
-tmux new -s learner -d 'source activate apex; REPLAY_IP="127.0.0.1" N_ACTORS=8 python learner.py --cuda; read'
+tmux new -s learner -d 'source activate apex; REPLAY_IP="127.0.0.1" N_ACTORS=8 python learner.py --cuda --soft_target_update=False; read'
 tmux new -s actor0 -d 'source activate apex; REPLAY_IP="127.0.0.1" LEARNER_IP="127.0.0.1" ACTOR_ID=0 N_ACTORS=8 python actor.py; read'
 tmux new -s actor1 -d 'source activate apex; REPLAY_IP="127.0.0.1" LEARNER_IP="127.0.0.1" ACTOR_ID=1 N_ACTORS=8 python actor.py; read'
 tmux new -s actor2 -d 'source activate apex; REPLAY_IP="127.0.0.1" LEARNER_IP="127.0.0.1" ACTOR_ID=2 N_ACTORS=8 python actor.py; read'

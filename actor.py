@@ -7,12 +7,14 @@ import zmq
 import torch
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
+import time
 
 import utils
 from memory import BatchStorage
 from wrapper import make_atari, wrap_atari_dqn
 from model import DuelingDQN
 from arguments import argparser
+from datetime import datetime
 
 
 def get_environ():
@@ -65,7 +67,7 @@ def exploration(args, actor_id, n_actors, replay_ip, param_queue):
     utils.set_global_seeds(seed, use_torch=True)
     env.seed(seed)
 
-    model = DuelingDQN(env)
+    model = DuelingDQN(env, args)
     epsilon = args.eps_base ** (1 + actor_id / (n_actors - 1) * args.eps_alpha)
     storage = BatchStorage(args.n_steps, args.gamma)
 
@@ -88,11 +90,16 @@ def exploration(args, actor_id, n_actors, replay_ip, param_queue):
 
         if done or episode_length == args.max_episode_length:
             state = env.reset()
-            writer.add_scalar("actor/episode_reward", episode_reward, episode_idx)
-            writer.add_scalar("actor/episode_length", episode_length, episode_idx)
+            tb_dict["episode_reward"].append(episode_reward)
+            tb_dict["episode_length"].append(episode_length)
             episode_reward = 0
             episode_length = 0
             episode_idx += 1
+
+            if episode_idx % args.tb_interval == 0:
+                for k, v in tb_dict.items():
+                    writer.add_scalar(f'actor/{k}', np.mean(v), episode_idx)
+                    v.clear()
 
         if actor_idx % args.update_interval == 0:
             try:
@@ -127,12 +134,12 @@ def vector_exploration(args, actor_id, n_actors, replay_ip, param_queue):
     envs = [wrap_atari_dqn(make_atari(args.env), args) for _ in range(num_envs)]
 
     if args.seed is not None:
-        seed = args.seed + actor_id
-        utils.set_global_seeds(seed, use_torch=True)
-        for env in envs:
-            env.seed(seed)
+        seeds = args.seed + actor_id * num_envs + np.arange(num_envs)
+        utils.set_global_seeds(seeds[0], use_torch=True)
+        for seed, env in zip(seeds, envs):
+            env.seed(int(seed))
 
-    model = DuelingDQN(envs[0])
+    model = DuelingDQN(envs[0], args)
     _actor_id = np.arange(num_envs) + actor_id * num_envs
     n_actors = n_actors * num_envs
     epsilons = args.eps_base ** (1 + _actor_id / (n_actors - 1) * args.eps_alpha)
@@ -148,19 +155,27 @@ def vector_exploration(args, actor_id, n_actors, replay_ip, param_queue):
     episode_rewards = [0] * num_envs
     episode_lengths = [0] * num_envs
     states = [env.reset() for env in envs]
+    tb_dict = {key: [] for key in ['episode_reward', 'episode_length']}
+    step_t = time.time()
+    ref_t = 0
+    sim_t = 0
     while True:
         if actor_idx * num_envs * n_actors <= args.initial_exploration_samples: # initial random exploration
             random_idx = np.arange(num_envs)
         else:
             random_idx, = np.where(np.random.random(num_envs) <= epsilons)
+        _t = time.time()
         with torch.no_grad():
-            states_tensor = torch.tensor(states)
+            states_tensor = torch.tensor(states, dtype=torch.float32)
             q_values = model(states_tensor).detach().numpy()
+        ref_t += time.time() - _t
         actions = np.argmax(q_values, 1)
         actions[random_idx] = np.random.choice(envs[0].action_space.n, len(random_idx))
 
         for i, (state, q_value, action, env, storage) in enumerate(zip(states, q_values, actions, envs, storages)):
+            _t = time.time()
             next_state, reward, done, _ = env.step(action)
+            sim_t += time.time() - _t
             storage.add(state, reward, action, done, q_value)
             states[i] = next_state
             episode_rewards[i] += reward
@@ -168,10 +183,24 @@ def vector_exploration(args, actor_id, n_actors, replay_ip, param_queue):
             if done or episode_lengths[i] == args.max_episode_length:
                 states[i] = env.reset()
                 tb_idx += 1
-                writer.add_scalar("actor/episode_reward", episode_rewards[i], tb_idx)
-                writer.add_scalar("actor/episode_length", episode_lengths[i], tb_idx)
+                tb_dict["episode_reward"].append(episode_rewards[i])
+                tb_dict["episode_length"].append(episode_lengths[i])
                 episode_rewards[i] = 0
                 episode_lengths[i] = 0
+                if tb_idx % args.tb_interval == 0:
+                    writer.add_scalar('actor/episode_reward_mean', np.mean(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/episode_reward_max', np.max(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/episode_reward_min', np.min(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/episode_reward_std', np.std(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/episode_length_mean', np.mean(tb_dict['episode_length']), tb_idx)
+                    tb_dict['episode_reward'].clear()
+                    tb_dict['episode_length'].clear()
+                    writer.add_scalar('actor/step_time', (time.time() - step_t) / np.sum(episode_lengths), tb_idx)
+                    writer.add_scalar('actor/step_inference_time', ref_t / np.sum(episode_lengths), tb_idx)
+                    writer.add_scalar('actor/step_simulation_time', sim_t / np.sum(episode_lengths), tb_idx)
+                    ref_t = 0
+                    sim_t = 0
+                    step_t = time.time()
 
         actor_idx += 1
 
@@ -203,7 +232,7 @@ def vector_exploration(args, actor_id, n_actors, replay_ip, param_queue):
                 outstanding -= 1
             batch_socket.send(data, copy=False)
             outstanding += 1
-            print(f"{actor_id}: send  batch {len(data)/1024} kb")
+            # print(f"{actor_id}: send  batch {len(data)/1024} kb")
 
 def main():
     actor_id, n_actors, replay_ip, learner_ip = get_environ()

@@ -10,3 +10,7 @@
 
 # test and logging folders
 runs
+
+# notebook
+.ipynb_checkpoints/
+*.ipynb
