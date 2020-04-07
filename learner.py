@@ -99,7 +99,7 @@ def recv_batch(batch_queue, replay_ip, device):
         data = thread_queue.get()
         batch = pickle.loads(data)
 
-        states, actions, rewards, next_states, dones, weights, idxes = batch
+        states, actions, rewards, next_states, dones, _, _, weights, idxes = batch
         states = np.array([np.array(state) for state in states])
         states = torch.FloatTensor(states).to(device)
         actions = torch.LongTensor(actions).to(device)

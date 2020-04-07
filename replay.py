@@ -101,6 +101,7 @@ async def recv_batch_worker(buffer, exe, event, lock, threshold_size):
     """
     coroutine to receive batch from actors
     """
+    _last_dump_time = time.time()
     loop = asyncio.get_event_loop()
     ctx = Context.instance()
     socket = ctx.socket(zmq.DEALER)
@@ -109,11 +110,17 @@ async def recv_batch_worker(buffer, exe, event, lock, threshold_size):
     start = False
     cnt = 0
     ts = time.time()
+    dump = False
 
     while True:
         identity, data = await socket.recv_multipart(copy=False)
         async with lock:
             await loop.run_in_executor(exe, push_batch, buffer, data)
+            _t = time.time()
+            if dump and _t - _last_dump_time > 60 * 10:
+                await loop.run_in_executor(exe, lambda b: b.dump_buffer(), buffer)
+                _last_dump_time = time.time()
+                print(f'buffer dumped, cost {_last_dump_time - _t} secs!')
         await socket.send_multipart((identity, b''))
         # TODO: 1. Only one worker should print log to console.
         #       2. Hard-coded part in (50 * cnt * 4) should be fixed.

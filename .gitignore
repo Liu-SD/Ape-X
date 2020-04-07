@@ -10,6 +10,7 @@
 
 # test and logging folders
 runs
+buffer_dumps
 
 # notebook
 .ipynb_checkpoints/

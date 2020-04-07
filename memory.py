@@ -5,6 +5,8 @@ import random
 from collections import deque
 import operator
 import numpy as np
+import pandas as pd
+import os
 
 
 class SegmentTree(object):
@@ -328,10 +330,11 @@ class CustomPrioritizedReplayBuffer(PrioritizedReplayBuffer):
     """
     def __init__(self, size, alpha):
         super(CustomPrioritizedReplayBuffer, self).__init__(size, alpha)
+        self.dump_idx = 0
 
-    def add(self, state, action, reward, next_state, done, priority):
+    def add(self, state, action, reward, next_state, done, timestamp, episode_idx, priority):
         idx = self._next_idx
-        data = (state, action, reward, next_state, done)
+        data = (state, action, reward, next_state, done, timestamp, episode_idx)
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
@@ -344,20 +347,45 @@ class CustomPrioritizedReplayBuffer(PrioritizedReplayBuffer):
         self._max_priority = max(self._max_priority, priority)
 
     def _encode_sample(self, idxes):
-        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
+        obses_t, actions, rewards, obses_tp1, dones, timestamps, episode_idxes = [], [], [], [], [], [], []
         for i in idxes:
             data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done = data
+            obs_t, action, reward, obs_tp1, done, timestamp, episode_idx = data
             obses_t.append(obs_t)
             actions.append(np.array(action, copy=False))
             rewards.append(np.array(reward, copy=False))
             obses_tp1.append(obs_tp1)
             dones.append(np.array(done, copy=False))
+            timestamps.append(timestamp)
+            episode_idxes.append(episode_idx)
         return (obses_t,
                 np.array(actions),
                 np.array(rewards),
                 obses_tp1,
-                np.array(dones))
+                np.array(dones),
+                timestamps,
+                episode_idxes)
+
+    def dump_buffer(self):
+        if not os.path.exists('buffer_dumps'):
+            os.mkdir('buffer_dumps')
+        buffer_ts = []
+        buffer_prios = []
+        buffer_episode_idx = []
+        dones = []
+        for data, prios in zip(self._storage, self._it_sum):
+            buffer_ts.append(data[-2])
+            buffer_episode_idx.append(data[-1])
+            dones.append(data[-3])
+            buffer_prios.append(prios)
+        buffer_df = pd.DataFrame({
+            'timestamp': buffer_ts,
+            'episode index': buffer_episode_idx,
+            'priority': buffer_prios,
+            'done': dones,
+        })
+        buffer_df.to_csv(f'buffer_dumps/buffer{self.dump_idx}.csv')
+        self.dump_idx += 1
 
 
 class BatchStorage:
@@ -371,18 +399,13 @@ class BatchStorage:
         self.action_deque = deque(maxlen=n_steps)
         self.reward_deque = deque(maxlen=n_steps)
         self.q_values_deque = deque(maxlen=n_steps)
-        self.states = []
-        self.actions = []
-        self.rewards = []
-        self.next_states = []
-        self.dones = []
-        self.q_values = []
-        self.next_q_values = []
+
+        self.reset()
 
         self.n_steps = n_steps
         self.gamma = gamma
 
-    def add(self, state, reward, action, done, q_values):
+    def add(self, state, reward, action, done, q_values, timestamp, episode_idx):
         if len(self.state_deque) == self.n_steps or done:
             t0_state = self.state_deque[0]
             t0_reward = self.multi_step_reward(*self.reward_deque, reward)
@@ -398,6 +421,8 @@ class BatchStorage:
             self.dones.append(done)
             self.q_values.append(t0_q_values)
             self.next_q_values.append(tp_n_q_values)
+            self.timestamps.append(timestamp)
+            self.episode_idxes.append(episode_idx)
 
         if done:
             self.state_deque.clear()
@@ -417,6 +442,8 @@ class BatchStorage:
         self.dones = []
         self.q_values = []
         self.next_q_values = []
+        self.timestamps = []
+        self.episode_idxes = []
 
     def compute_priorities(self):
         # TODO: Should I seperate this method from BatchStorage class?
@@ -435,7 +462,7 @@ class BatchStorage:
 
     def make_batch(self):
         prios = self.compute_priorities()
-        batch = [self.states, self.actions, self.rewards, self.next_states, self.dones]
+        batch = [self.states, self.actions, self.rewards, self.next_states, self.dones, self.timestamps, self.episode_idxes]
         return batch, prios
 
     def multi_step_reward(self, *rewards):
