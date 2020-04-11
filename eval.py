@@ -86,9 +86,9 @@ def exploration(args, actor_id, param_queue):
             episode_idx += 1
             param = param_queue.get()
             model.load_state_dict(param)
-            print("Updated Parameter..")
+            print(f"{datetime.now()} Updated Parameter..")
 
-            if episode_idx % args.tb_interval == 0:
+            if (episode_idx * args.num_envs_per_worker) % args.tb_interval == 0:
                 writer.add_scalar('evaluator/episode_reward_mean', np.mean(tb_dict['episode_reward']), episode_idx)
                 writer.add_scalar('evaluator/episode_reward_max', np.max(tb_dict['episode_reward']), episode_idx)
                 writer.add_scalar('evaluator/episode_reward_min', np.min(tb_dict['episode_reward']), episode_idx)
